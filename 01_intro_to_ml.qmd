@@ -1,0 +1,136 @@
+---
+title: "01_intro_to_ml"
+format: html
+---
+
+## Intro to the datasets
+
+Property sales information as described in De Cock (2011).
+
+* problem type: supervised regression
+* response variable: Sale_Price (i.e., $195,000, $215,000)
+* features: 80
+* observations: 2,930
+* objective: use property attributes to predict the sale price of a home
+* access: provided by the `AmesHousing` package (Kuhn 2017a)
+* more details: See `?AmesHousing::ames_raw`
+
+```{r}
+#| output: false
+
+### access data
+ames <- AmesHousing::make_ames()
+
+### initial dimension
+dim(ames)
+# [1] 2930   81
+
+### response variable
+head(ames$Sale_Price)
+# [1] 215000 105000 172000 244000 189900 195500
+```
+
+Employee attrition information originally provided by IBM Watson Analytics Lab.
+
+* problem type: supervised binomial classification
+* response variable: Attrition (i.e., “Yes”, “No”)
+* features: 30
+* observations: 1,470
+* objective: use employee attributes to predict if they will attrit (leave the company)
+* access: provided by the `rsample` package (Kuhn and Wickham 2019)
+    * NOTE: these are now in the `modeldata` package!
+* more details: See `?rsample::attrition`
+    * see `?modeldata::attrition` instead
+
+```{r}
+#| output: false
+
+### access data
+attrition <- modeldata::attrition
+
+### initial dimension
+dim(attrition)
+# [1] 1470   31
+
+### response variable
+head(attrition$Attrition)
+# [1] Yes No  Yes No  No  No 
+# Levels: No Yes
+```
+
+Image information for handwritten numbers originally presented to AT&T Bell Lab’s to help build automatic mail-sorting machines for the USPS. Has been used since early 1990s to compare machine learning performance on pattern recognition (i.e., LeCun et al. (1990); LeCun et al. (1998); Cireşan, Meier, and Schmidhuber (2012)).
+
+* Problem type: supervised multinomial classification
+* response variable: V785 (i.e., numbers to predict: 0, 1, …, 9)
+* features: 784
+* observations: 60,000 (train) / 10,000 (test)
+* objective: use attributes about the “darkness” of each of the 784 pixels in images of handwritten numbers to predict if the number is 0, 1, …, or 9.
+* access: provided by the `dslabs` package (Irizarry 2018)
+* more details: See `?dslabs::read_mnist()` and online MNIST documentation
+
+
+```{r}
+#| output: false
+
+### access data
+mnist <- dslabs::read_mnist()
+names(mnist)
+# [1] "train" "test"
+
+### initial feature dimensions
+dim(mnist$train$images)
+# [1] 60000   784
+
+### response variable
+head(mnist$train$labels)
+# [1] 5 0 4 1 9 2
+```
+
+
+Grocery items and quantities purchased. Each observation represents a single basket of goods that were purchased together.
+
+* Problem type: unsupervised basket analysis
+* response variable: NA
+* features: 42
+* observations: 2,000
+* objective: use attributes of each basket to identify common groupings of items purchased together.
+* access: available on the companion website for this book
+
+```{r}
+#| output: false
+
+### URL to download/read in the data
+url <- "https://koalaverse.github.io/homlr/data/my_basket.csv"
+
+### Access data
+my_basket <- readr::read_csv(url)
+
+### Print dimensions
+dim(my_basket)
+# [1] 2000   42
+
+### Peek at response variable
+my_basket
+# # A tibble: 2,000 x 42
+#    `7up` lasagna pepsi   yop red.wine cheese   bbq bulmers mayonnaise
+#    <dbl>   <dbl> <dbl> <dbl>    <dbl>  <dbl> <dbl>   <dbl>      <dbl>
+#  1     0       0     0     0        0      0     0       0          0
+#  2     0       0     0     0        0      0     0       0          0
+#  3     0       0     0     0        0      0     0       0          0
+#  4     0       0     0     2        1      0     0       0          0
+#  5     0       0     0     0        0      0     0       2          0
+#  6     0       0     0     0        0      0     0       0          0
+#  7     1       1     0     0        0      0     1       0          0
+#  8     0       0     0     0        0      0     0       0          0
+#  9     0       1     0     0        0      0     0       0          0
+# 10     0       0     0     0        0      0     0       0          0
+# # … with 1,990 more rows, and 33 more variables: horlics <dbl>,
+# #   chicken.tikka <dbl>, milk <dbl>, mars <dbl>, coke <dbl>,
+# #   lottery <dbl>, bread <dbl>, pizza <dbl>, sunny.delight <dbl>,
+# #   ham <dbl>, lettuce <dbl>, kronenbourg <dbl>, leeks <dbl>, fanta <dbl>,
+# #   tea <dbl>, whiskey <dbl>, peas <dbl>, newspaper <dbl>, muesli <dbl>,
+# #   white.wine <dbl>, carrots <dbl>, spinach <dbl>, pate <dbl>,
+# #   instant.coffee <dbl>, twix <dbl>, potatoes <dbl>, fosters <dbl>,
+# #   soup <dbl>, toad.in.hole <dbl>, coco.pops <dbl>, kitkat <dbl>,
+# #   broccoli <dbl>, cigarettes <dbl>
+```
