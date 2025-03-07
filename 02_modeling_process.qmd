@@ -1,7 +1,8 @@
 ---
 title: "02_modeling_process"
 format: 
-  html
+  html:
+    embed-resources: true
 execute:
   message: false
   warning: false
@@ -18,6 +19,9 @@ library(ggplot2)   ### for awesome graphics
 library(rsample)   ### for resampling procedures
 library(caret)     ### for resampling and model training
 library(h2o)       ### for resampling and model training
+
+### tidymodels conversion
+library(tidymodels)
 
 ### h2o set-up 
 h2o.no_progress()  ### turn off h2o progress bars
@@ -194,6 +198,16 @@ lm_glm   <- glm(Sale_Price ~ ., data = ames,
                 family = gaussian)
 lm_caret <- train(Sale_Price ~ ., data = ames, 
                   method = "lm")
+
+### tidymodels version
+lm_tm <- linear_reg()
+
+lm_tm_fit <- lm_tm %>%
+  fit(Sale_Price ~ ., data = ames)
+
+summary(lm_lm)
+summary(lm_glm)
+tidy(lm_tm_fit)
 ```
 
 ## Resampling methods
@@ -296,7 +310,7 @@ Classification models often use a confusion matrix to evaluate performance; for 
 
 Simple assessment on `ames` data.
 
-Stratified sampling:
+Stratified sampling:  NOTE, this uses `rsample` which is part of tidymodels already: `rsample::initial_split()`, `rsample::training()`, `rsample::testing()`.
 
 ```{r}
 set.seed(123)
@@ -320,6 +334,7 @@ knn_fit_file <- here::here('data/02_modeling_process_knn_fit.rds')
 
 if(!file.exists(knn_fit_file)) {
   ### tune knn model using grid search
+  system.time({
   knn_fit <- train(
     Sale_Price ~ .,
     data = train_strat,
@@ -328,8 +343,9 @@ if(!file.exists(knn_fit_file)) {
     tuneGrid = grid,
     metric = "RMSE"
   )
+  }) ### elapsed time 134 seconds
   
-  save(knn_fit, file = knn_fit_file)
+   save(knn_fit, file = knn_fit_file)
 }
 
 load(knn_fit_file)
@@ -341,4 +357,70 @@ ggplot(knn_fit)
 ```
 
 With this setup we get a different plot than that in the tutorial, but still minimizing around 6-7.
+
+### Let's do that with `tidymodels` instead of `caret`
+
+Basic model setup with cross validation
+
+```{r}
+### need to try some CV using rsample package (in tidymodels):
+folds <- vfold_cv(train_strat, v = 10)
+
+### Set up model with `neighbors` to be tuned
+knn_mdl <- nearest_neighbor(
+  mode = 'regression',     ### default "unknown" - set to regression or classification
+  engine = 'kknn',         ### default, but have to install the package
+  neighbors = tune()
+)
+
+# ### create grid of hyperparam values
+k_grid <- expand.grid(neighbors = seq(2, 25, by = 1))
+
+knn_tune_wf <- workflow() %>%
+  add_model(knn_mdl) %>%
+  add_formula(Sale_Price ~ .)
+
+system.time({
+knn_tune_res <- knn_tune_wf %>%
+  tune_grid(resamples = folds,
+            grid = k_grid)
+}) ### elapsed time 50.91 s - much faster than caret
+
+metrics <- knn_tune_res %>%
+  collect_metrics()
+
+ggplot(metrics, aes(x = neighbors, y = mean)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2) +
+  # scale_x_log10(labels = scales::label_number()) +
+  scale_color_viridis_d(option = "plasma", begin = .9, end = 0)
+```
+
+Different pattern here than using `caret`?  here the min RMSE is around 14-15 neighbors, not 6.
+
+Now train model using `neighbors = 14`.
+
+```{r}
+knn_tune_res %>% show_best(metric = 'rmse') ### to examine the 5 best parameter values
+
+knn_tune_best <- select_best(knn_tune_res, metric = 'rmse') ### to select the best parameter value
+
+final_knn_wf <- knn_tune_wf %>%
+  finalize_workflow(knn_tune_best) ### add best params to workflow
+
+final_fit <- final_knn_wf %>%
+  last_fit(split_strat) ### train model on the entire training set then eval on test set
+
+final_fit %>%
+  collect_metrics() ### get the metrics
+
+final_fit %>%
+  collect_predictions() %>%
+  ggplot(aes(x = Sale_Price, y = .pred)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = 'red')
+
+final_tree <- extract_workflow(final_fit)
+```
 
