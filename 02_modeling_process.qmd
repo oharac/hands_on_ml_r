@@ -1,5 +1,5 @@
 ---
-title: "02_modeling_process"
+title: "Modeling Process"
 format: 
   html:
     embed-resources: true
@@ -205,9 +205,32 @@ lm_tm <- linear_reg()
 lm_tm_fit <- lm_tm %>%
   fit(Sale_Price ~ ., data = ames)
 
-summary(lm_lm)
-summary(lm_glm)
-tidy(lm_tm_fit)
+# summary(lm_lm)
+# Coefficients: (7 not defined because of singularities)
+#                                                        Estimate Std. Error  t value Pr(>|t|)
+# (Intercept)                                          -9.836e+06  9.004e+06   -1.092 0.274765
+# MS_SubClassOne_Story_1945_and_Older                   4.293e+03  2.909e+03    1.476 0.140104 
+# MS_SubClassOne_Story_with_Finished_Attic_All_Ages     1.194e+04  9.840e+03    1.213 0.225066
+# MS_SubClassOne_and_Half_Story_Unfinished_All_Ages     1.222e+04  1.159e+04    1.054 0.291851
+# ...                                                         ...        ...
+
+# summary(lm_glm)
+# Coefficients: (7 not defined because of singularities)
+#                                                        Estimate Std. Error  t value Pr(>|t|)
+# (Intercept)                                          -9.836e+06  9.004e+06   -1.092 0.274765
+# MS_SubClassOne_Story_1945_and_Older                   4.293e+03  2.909e+03    1.476 0.140104 
+# MS_SubClassOne_Story_with_Finished_Attic_All_Ages     1.194e+04  9.840e+03    1.213 0.225066
+# MS_SubClassOne_and_Half_Story_Unfinished_All_Ages     1.222e+04  1.159e+04    1.054 0.291851
+# ...                                                         ...        ...
+# tidy(lm_tm_fit)
+# A tibble: 307 × 5
+#    term                                     estimate std.error statistic p.value
+#    <chr>                                       <dbl>     <dbl>     <dbl>   <dbl>
+#  1 (Intercept)                               -9.84e6  9004118.   -1.09    0.275 
+#  2 MS_SubClassOne_Story_1945_and_Older        4.29e3     2909.    1.48    0.140 
+#  3 MS_SubClassOne_Story_with_Finished_Atti…   1.19e4     9840.    1.21    0.225 
+#  4 MS_SubClassOne_and_Half_Story_Unfinishe…   1.22e4    11594.    1.05    0.292 
+# # ℹ 303 more rows
 ```
 
 ## Resampling methods

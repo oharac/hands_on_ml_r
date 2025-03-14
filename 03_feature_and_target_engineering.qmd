@@ -1,0 +1,659 @@
+---
+title: "Feature and Target Engineering"
+format: 
+  html:
+    embed-resources: true
+---
+
+## Prerequisites
+
+```{r}
+# Helper packages
+library(tidyverse)    # for data manipulation
+library(visdat)   # for additional visualizations
+
+# Data preparation packages
+library(rsample)
+
+# Feature engineering packages
+library(caret)    # for various ML tasks
+library(recipes)  # for feature engineering tasks
+```
+
+Using same `ames_train` from section 2.7:
+
+```{r}
+# Stratified sampling with the rsample package
+set.seed(123)
+data('ames', package = "modeldata") # load the Ames housing data
+split <- initial_split(ames, prop = 0.7, 
+                       strata = "Sale_Price")
+ames_train  <- training(split)
+ames_test   <- testing(split)
+```
+
+## Target Engineering
+
+### log transformation of skewed distributions
+
+Positively skewed (right-skewed) distributions - use log transformation is a good one, if no neg or zero values.
+
+```{r}
+transformed_response <- log(ames_train$Sale_Price)
+```
+
+Using recipes:
+
+> However, we should think of the preprocessing as creating a blueprint to be re-applied strategically. For this, you can use the `recipe` package or something similar (e.g., `caret::preProcess()`). This will not return the actual log transformed values but, rather, a blueprint to be applied later.
+
+The `recipe` package is built in to the `tidymodels` framework already.
+
+```{r}
+#| eval: false
+
+ames_recipe_log <- recipe(Sale_Price ~ ., data = ames_train) %>%
+  step_log(all_outcomes())
+
+ames_recipe_log
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Log transformation on: all_outcomes()
+```
+
+### Box Cox transformation
+
+More flexible than log, but includes log as a special case.  Finds a $\lambda$ that transforms the variable as close to normal as possible:
+
+$$y(\lambda) = \begin{cases} \frac{y^\lambda - 1}{\lambda} & \text{if } \lambda \neq 0 \\ \log(y) & \text{if } \lambda = 0 \end{cases}$$
+
+::: {.callout-warning}
+
+Compute $\lambda$ on training set and use same value on test set to minimize data leakage.
+
+If neg values present, Yeo-Johnson is similar to Box-Cox but can handle neg values.
+
+:::
+
+```{r}
+ames_recipe_bc <- recipe(Sale_Price ~ ., data = ames_train) %>%
+  step_BoxCox(all_outcomes())
+
+ames_recipe_yj <- recipe(Sale_Price ~ ., data = ames_train) %>%
+  step_YeoJohnson(all_outcomes())
+```
+
+```{r}
+#| echo: false
+
+price_ln <- log(ames_train$Sale_Price)
+price_bc <- ames_recipe_bc %>%
+  prep() %>%
+  bake(new_data = NULL) %>%
+  pull(Sale_Price)
+price_yj <- ames_recipe_yj %>%
+  prep() %>%
+  bake(new_data = NULL) %>%
+  pull(Sale_Price)
+data.frame(price = ames_train$Sale_Price,
+             price_ln = price_ln,
+             price_bc = price_bc,
+             price_yj = price_yj) %>%
+  pivot_longer(cols = everything(), names_to = "transformation", values_to = "value") %>%
+  ggplot() +
+  geom_histogram(aes(x = value, fill = transformation), show.legend = FALSE) +
+  facet_wrap(~transformation, scales = "free_x", nrow = 2) +
+  theme_minimal()
+```
+
+## Dealing with missingness
+
+Explore data to see missingness and patterns
+
+```{r}
+#| eval: false
+sum(is.na(AmesHousing::ames_raw))
+## [1] 13997
+sum(is.na(AmesHousing::make_ames()))
+## [1] 0
+```
+
+### visualize
+
+```{r}
+AmesHousing::ames_raw %>%
+  is.na() %>%
+  reshape2::melt() %>%
+  ggplot(aes(Var1, Var2, fill=value)) + 
+    geom_raster() + 
+    scale_x_continuous(NULL, expand = c(0, 0)) +
+    scale_fill_viridis_d(name = "", 
+                    labels = c("Present", 
+                               "Missing")) +
+    xlab("Observation") +
+    theme(axis.text.y  = element_text(size = 4))
+
+vis_miss(AmesHousing::ames_raw, cluster = TRUE) +
+  theme(axis.text.x  = element_text(size = 4)) 
+```
+> Digging a little deeper into these variables, we might notice that `Garage_Cars` and `Garage_Area` contain the value 0 whenever the other `Garage_xx` variables have missing values (i.e. a value of `NA`). This might be because they did not have a way to identify houses with no garages when the data were originally collected, and therefore, all houses with no garage were identified by including nothing. Since this missingness is informative, it would be appropriate to impute `NA` with a new category level (e.g., `"None"`) for these garage variables. Circumstances like this tend to only become apparent upon careful descriptive and visual examination of the data!
+
+### Imputation
+
+Imputation should be one of the first feature engineering steps as it affects all downstream steps.
+
+#### Estimated statistic
+
+Some strategies:
+
+* Fill NA with summary statistic e.g., mean, median, mode.  Simple, but loses info from other variable observations.
+* Alternately, grouped stats , e.g., mean by sex, median by neighborhood, etc.
+* For larger datasets with many groups, consider K-nearest neighbor and tree-based imputation.
+
+Use `recipes` to impute missing values with the `step_impute_*` functions.  For example, `step_impute_mean()` replaces missing values with the mean of the variable.  This imputes living room area based on median:
+
+```{r}
+#| eval: false
+
+ames_recipe %>%
+  step_impute_median(Gr_Liv_Area)
+
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Log transformation on: all_outcomes()
+# • Median imputation for: Gr_Liv_Area
+```
+
+Other imputes: Other imputation steps: `step_impute_bag()`, `step_impute_knn()`, `step_impute_linear()`, `step_impute_lower()`, `step_impute_mean()`, `step_impute_mode()`, `step_impute_roll()`
+
+#### K-nearest neighbor
+
+> K-nearest neighbor (KNN) imputes values by identifying observations with missing values, then identifying other observations that are most similar based on the other available features, and using the values from these nearest neighbor observations to impute missing values. ... KNN imputation is best used on small to moderate sized data sets as it becomes computationally burdensome with larger data sets (Kuhn and Johnson 2019).
+
+```{r}
+#| eval: false
+
+ames_recipe %>%
+  step_impute_knn(all_predictors(), neighbors = 6)
+
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Log transformation on: all_outcomes()
+# • K-nearest neighbor imputation for: all_predictors()
+```
+
+#### Tree-based imputation
+
+> As previously discussed, several implementations of decision trees (Chapter 9) and their derivatives can be constructed in the presence of missing values. Thus, they provide a good alternative for imputation. As discussed in Chapters 9-11, single trees have high variance but aggregating across many trees creates a robust, low variance predictor.
+
+```{r}
+#| eval: false
+
+ames_recipe %>%
+  step_impute_bag(all_predictors())
+
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Log transformation on: all_outcomes()
+# • Bagged tree imputation for: all_predictors() 
+```
+
+![](img/engineering-imputation-examples-1.png){width=600}
+
+## Feature filtering
+
+> In many data analyses and modeling projects we end up with hundreds or even thousands of collected features. From a practical perspective, a model with more features often becomes harder to interpret and is costly to compute. Some models are more resistant to non-informative predictors (e.g., the Lasso and tree-based methods) than others as illustrated in Figure 3.6.16
+
+![](img/engineering-accuracy-comparison-1.png){width=600}
+
+> Zero and near-zero variance variables are low-hanging fruit to eliminate. Zero variance variables, meaning the feature only contains a single unique value, provides no useful information to a model. Some algorithms are unaffected by zero variance features. However, features that have near-zero variance also offer very little, if any, information to a model. Furthermore, they can cause problems during resampling as there is a high probability that a given sample will only contain a single unique value (the dominant value) for that feature. A rule of thumb for detecting near-zero variance features is:
+> 
+> * The fraction of unique values over the sample size is low (say ≤10%).
+> * The ratio of the frequency of the most prevalent value to the frequency of the second most prevalent value is large (say ≥20%).
+> 
+> If both of these criteria are true then it is often advantageous to remove the variable from the model. For the Ames data, we do not have any zero variance predictors but there are 20 features that meet the near-zero threshold.
+
+```{r}
+caret::nearZeroVar(ames_train, saveMetrics = TRUE) %>% 
+  tibble::rownames_to_column() %>% 
+  filter(nzv)
+
+#               rowname  freqRatio percentUnique zeroVar  nzv
+# 1              Street  226.66667    0.09760859   FALSE TRUE
+# 2               Alley   24.25316    0.14641288   FALSE TRUE
+# 3        Land_Contour   19.50000    0.19521718   FALSE TRUE
+# 4           Utilities 1023.00000    0.14641288   FALSE TRUE
+# ...               ...        ...           ...     ...  ...
+```
+
+::: {.callout-note}
+
+We can add `step_zv()` and/or `step_nzv()` to our recipe to remove zero and near-zero variance predictors, respectively.
+
+:::
+
+## Numeric feture engineering
+
+Problems from skew, outliers, or wide range of magnitudes.  Tree-based models are pretty immune, but many others are not. E.g.: GLM, regularized regression, KNN, SVM, neural networks).  Standardizing and normalizing can help minimize problems.
+
+### Skewness
+
+::: {.callout-note}
+
+Non-parametric models are rarely affected by skewed features, but normalization won't have a negative efect - so when in doubt, normalize!
+
+:::
+
+```{r}
+#| eval: false
+# Normalize all numeric columns
+recipe(Sale_Price ~ ., data = ames_train) %>%
+  step_YeoJohnson(all_numeric())
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Yeo-Johnson transformation on: all_numeric()
+```
+
+### Standardization
+
+Mean 0, sd 1 transformation - probably most important for distance-based algorithms. 
+
+```{r}
+#| eval: false
+
+ames_recipe %>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes())
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Log transformation on: all_outcomes()
+# • Centering for: all_numeric() -all_outcomes()
+# • Scaling for: all_numeric() -all_outcomes()
+```
+
+## Categorical feature engineering
+
+### Lumping
+
+> Sometimes features will contain levels that have very few observations. For example, there are 28 unique neighborhoods represented in the Ames housing data but several of them only have a few observations.
+
+> Even numeric features can have similar distributions. For example, Screen_Porch has 92% values recorded as zero (zero square footage meaning no screen porch) and the remaining 8% have unique dispersed values.
+
+> In the above examples, we may want to collapse all levels that are observed in less than 10% of the training sample into an “other” category. We can use `step_other()` to do so. However, lumping should be used sparingly as there is often a loss in model performance (Kuhn and Johnson 2013).
+
+::: {.callout-note}
+
+Tree-based models are pretty good with "high cardinality" features, i.e., lots of distinct values... so lumping not as critical
+
+:::
+
+::: {.callout-warning} 
+
+Note that step_other requires string, factor, or ordered - update since book?
+
+:::
+
+```{r}
+#| eval: false
+
+ames_train_mod <- ames_train %>% mutate(Screen_Porch = as.character(Screen_Porch))
+
+# Lump levels for two features
+lumping <- recipe(Sale_Price ~ ., data = ames_train_mod) %>%
+  step_other(Neighborhood, threshold = 0.01, 
+             other = "other") %>%
+  step_other(Screen_Porch, threshold = 0.1,
+             other = ">0")
+
+# Apply this blue print --> you will learn about this at 
+# the end of the chapter
+apply_2_training <- prep(lumping, training = ames_train_mod) %>%
+  bake(ames_train_mod)
+
+# New distribution of Neighborhood
+count(apply_2_training, Neighborhood) %>% arrange(n)
+## # A tibble: 22 x 2
+##    Neighborhood                                n
+##    <fct>                                   <int>
+##  1 Bloomington_Heights                        21
+##  2 South_and_West_of_Iowa_State_University    30
+##  3 Meadow_Village                             30
+##  4 Clear_Creek                                31
+## # … with 18 more rows
+
+# New distribution of Screen_Porch
+count(apply_2_training, Screen_Porch) %>% arrange(n)
+## # A tibble: 2 x 2
+##   Screen_Porch     n
+##   <fct>        <int>
+## 1 >0             180
+## 2 0             1869
+```
+
+### One-hot and dummy encoding
+
+> Many models require that all predictor variables be numeric. Consequently, we need to intelligently transform any categorical variables into numeric representations so that these algorithms can compute. Some packages automate this process (e.g., h2o and caret) while others do not (e.g., glmnet and keras). There are many ways to recode categorical variables as numeric (e.g., one-hot, ordinal, binary, sum, and Helmert).
+
+One-hot is to encode each categorical value into a boolean, one for each level.  But this creates a perfect collinearity matrix which can cause problems.  Dropping one column (as the default category) creates dummy encoding to avoid this.  Use `step_dummy()`.
+
+```{r}
+#| eval: false
+
+# Lump levels for two features
+recipe(Sale_Price ~ ., data = ames_train) %>%
+  step_dummy(all_nominal(), one_hot = TRUE)
+
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Dummy variables from: all_nominal()
+```
+
+::: {.callout-note}
+
+> Since one-hot encoding adds new features it can significantly increase the dimensionality of our data. If you have a data set with many categorical variables and those categorical variables in turn have many unique levels, the number of features can explode. In these cases you may want to explore label/ordinal encoding or some other alternative.
+
+:::
+
+### Label encoding
+
+Conversion of levels of a categorical variable to pure numeric values - if factor or ordered, then in level order; otherwise in alphabetical order.  Probably best left to ordinal variables.  Use `step_integer()`.
+
+### Alternatives
+
+Target encoding replaces a categorical variable with the mean (regression) or proportion (classification) of the target variable.  E.g., replace neighborhood name with mean of Sale_Price for that neighborhood.  Runs risk of data leakage since the feature contains info about the response variable.  Could alterately replace neighborhood with the proportion of data that falls in that neighborhood.
+
+> Several alternative approaches include effect or likelihood encoding (Micci-Barreca 2001; Zumel and Mount 2016), empirical Bayes methods (West, Welch, and Galecki 2014), word and entity embeddings (Guo and Berkhahn 2016; Chollet and Allaire 2018), and more. For more in depth coverage of categorical encodings we highly recommend Kuhn and Johnson (2019).
+
+## Dimensionality reduction
+
+Filter out non-informative features without manually removing them.  E.g., PCA to remove correlated features, and only keep those that explain some threshold of variance, e.g., 95%.
+
+```{r}
+#| eval: false
+
+recipe(Sale_Price ~ ., data = ames_train) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric()) %>%
+  step_pca(all_numeric(), threshold = .95)
+
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Centering for: all_numeric()
+# • Scaling for: all_numeric()
+# • PCA extraction with: all_numeric()
+```
+
+## Proper implementation
+
+Feature engineering as a blueprint rather than a bunch of individual manual tasks.  1) thinking sequentially, 2) apply appropriately within resampling process
+
+> While your project’s needs may vary, here is a suggested order of potential steps that should work for most problems:
+> 
+> * Filter out zero or near-zero variance features.
+> * Perform imputation if required.
+> * Normalize to resolve numeric feature skewness.
+> * Standardize (center and scale) numeric features.
+> * Perform dimension reduction (e.g., PCA) on numeric features.
+> * One-hot or dummy encode categorical features.
+
+### Data leakage
+
+Occurs when info from outside the training data set is used to create the model... often occurs during data pre-processing.  E.g., if you impute missing values using the entire dataset, then you are leaking info from the test set into the training set.
+
+Feature engineering should thus be done in isolation of each resampling iteration.  Thus, apply feature engineering blueprint to each resample independently - each resample is an case of isolated training and test data.  E.g., when rescaling to standardize, only use mean and sd of training data are used, and applied to the same resampled test data.
+
+### Putting it all together
+
+> The recipes package allows us to develop our feature engineering blueprint in a sequential nature. The idea behind recipes is similar to caret::preProcess() where we want to create the preprocessing blueprint but apply it later and within each resample.17
+
+There are three main steps in creating and applying feature engineering with recipes:
+
+* `recipe`: define feature engineering steps to create blueprint.
+    * supply formula, then add sequence of steps with `step_*()` functions.
+* `prep`: estimate feature engineering parameters based on training data.
+    * apply blueprint to training data to estimate parameters (e.g., mean, sd, PCA loadings).
+* `bake`: apply blueprint to new data.
+
+#### `recipe`
+
+```{r}
+blueprint <- recipe(Sale_Price ~ ., data = ames_train) %>%
+  step_nzv(all_nominal())  %>%
+  step_integer(matches("Qual|Cond|QC|Qu")) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes()) %>%
+  step_pca(all_numeric(), -all_outcomes())
+
+# blueprint
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Operations 
+# • Sparse, unbalanced variable filter on: all_nominal()
+# • Integer encoding for: matches("Qual|Cond|QC|Qu")
+# • Centering for: all_numeric() -all_outcomes()
+# • Scaling for: all_numeric() -all_outcomes()
+# • PCA extraction with: all_numeric() -all_outcomes()
+
+```
+
+#### `prep`
+
+```{r}
+prepare <- prep(blueprint, training = ames_train)
+
+# prepare
+
+# ── Inputs 
+# Number of variables by role
+# outcome:    1
+# predictor: 73
+# 
+# ── Training information 
+# Training data contained 2049 data points and no incomplete rows.
+# 
+# ── Operations 
+# • Sparse, unbalanced variable filter removed: Street Alley, ... | Trained
+# • Integer encoding for: Condition_1, Overall_Cond, Exter_Cond, ... | Trained
+# • Centering for: Lot_Frontage, Lot_Area, Condition_1, ... | Trained
+# • Scaling for: Lot_Frontage, Lot_Area, Condition_1, Overall_Cond, ... | Trained
+# • PCA extraction with: Lot_Frontage, Lot_Area, Condition_1, ... | Trained
+```
+
+#### `bake`
+
+```{r}
+baked_train <- bake(prepare, new_data = ames_train)
+
+baked_test  <- bake(prepare, new_data = ames_test)
+
+# baked_train
+
+# # A tibble: 2,049 × 27
+#    MS_SubClass        MS_Zoning Lot_Shape Lot_Config Neighborhood Bldg_Type House_Style
+#    <fct>              <fct>     <fct>     <fct>      <fct>        <fct>     <fct>      
+#  1 Two_Story_PUD_194… Resident… Regular   Inside     Briardale    Twnhs     Two_Story  
+#  2 Two_Story_PUD_194… Resident… Regular   Inside     Briardale    Twnhs     Two_Story  
+#  3 One_Story_PUD_194… Resident… Regular   FR2        Northpark_V… Twnhs     One_Story  
+#  4 One_Story_PUD_194… Resident… Regular   Inside     Sawyer_West  TwnhsE    One_Story  
+#  5 One_Story_1945_an… Resident… Regular   Corner     Sawyer_West  OneFam    One_Story  
+#  6 Duplex_All_Styles… Resident… Regular   Inside     Sawyer       Duplex    One_and_Ha…
+#  7 One_Story_1946_an… Resident… Slightly… Inside     Sawyer       OneFam    One_Story  
+#  8 One_Story_1946_an… Resident… Slightly… Corner     Sawyer       OneFam    One_Story  
+#  9 Duplex_All_Styles… Resident… Slightly… Inside     North_Ames   Duplex    One_Story  
+# 10 One_Story_1946_an… Resident… Regular   Inside     North_Ames   OneFam    One_Story  
+# # ℹ 2,039 more rows
+# # ℹ 20 more variables: Roof_Style <fct>, Exterior_1st <fct>, Exterior_2nd <fct>,
+# #   Mas_Vnr_Type <fct>, Foundation <fct>, Bsmt_Exposure <fct>, BsmtFin_Type_1 <fct>,
+# #   Central_Air <fct>, Electrical <fct>, Garage_Type <fct>, Garage_Finish <fct>,
+# #   Paved_Drive <fct>, Fence <fct>, Sale_Type <fct>, Sale_Price <int>, PC1 <dbl>,
+# #   PC2 <dbl>, PC3 <dbl>, PC4 <dbl>, PC5 <dbl>
+# # ℹ Use `print(n = ...)` to see more rows
+```
+
+### Example with `caret`
+
+Set up blueprint:
+
+```{r}
+blueprint2 <- recipe(Sale_Price ~ ., data = ames_train) %>%
+  step_nzv(all_nominal()) %>%
+  step_integer(matches("Qual|Cond|QC|Qu")) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE)
+
+```
+
+Set up resampling plan and hyperparameter grid, then pass `blueprint` to `train()` - note this is very slow!
+
+```{r}
+#| eval: false
+
+# Specify resampling plan
+cv <- trainControl(
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 5
+)
+
+# Construct grid of hyperparameter values
+hyper_grid <- expand.grid(k = seq(2, 25, by = 1))
+
+knn_fit2_file <- here::here('data/03_feature_and_target_engineering_knn_fit2.rds')
+
+if(!file.exists(knn_fit2_file)) {
+
+  # Tune a knn model using grid search
+  system.time({
+    knn_fit2 <- train(
+      blueprint2, 
+      data = ames_train, 
+      method = "knn", 
+      trControl = cv, 
+      tuneGrid = hyper_grid,
+      metric = "RMSE"
+    )
+  }) ### elapsed time: 452.75 seconds!
+  
+  save(knn_fit2, file = knn_fit2_file)
+}
+
+load(knn_fit2_file)
+
+ggplot(knn_fit2)
+```
+
+Without all the pre-processing (see script 2, modeling process), we had a min RMSE around $44k.  Now we have minimum about $34.5k!  Though note with `tidymodels` process without pre-processing, min RMSE was about $36k.
+
+## Try with all `tidymodels` process
+
+```{r}
+library(tidymodels)
+
+folds <- vfold_cv(ames_train, v = 10, repeats = 5)
+
+### Set up knn model with neighbors to be tuned
+knn_mdl <- nearest_neighbor(
+  mode = 'regression',
+  engine = 'kknn',
+  neighbors = tune()
+)
+
+k_grid <- expand.grid(neighbors = 2:25)
+
+knn_tune_wf <- workflow() %>%
+  add_model(knn_mdl) %>%
+  add_recipe(blueprint2)
+```
+
+tune the model for k:
+
+```{r}
+knn_tune_res_f <- here::here('data/03_feature_and_target_engineering_knn_tune_res_f.rds')
+if(!file.exists(knn_tune_res_f)) {
+  system.time({
+    knn_tune_res <- knn_tune_wf %>%
+      tune_grid(resamples = folds,
+                grid = k_grid)
+  }) ### 180 sec, much faster than caret but still!
+  
+  save(knn_tune_res, file = knn_tune_res_f)
+}
+load(knn_tune_res_f)
+```
+
+examine results
+
+```{r}
+metrics <- knn_tune_res %>%
+  collect_metrics()
+
+ggplot(metrics, aes(x = neighbors, y = mean)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2)
+```
+
+Interestingly, using a `tidymodels` workflow now, our RMSE is actually a little *higher* than before the pre-processing ($37.5k vs $36k)... and R-squared is a little lower (.79 vs .82)...  this version suggests $k=12$ or so to minimize RMSE, while the caret version suggested $k=5$.
+
+```{r}
+knn_tune_res %>% show_best(metric = 'rmse')
+
+knn_tune_best <- select_best(knn_tune_res, metric = 'rmse')
+
+final_knn_wf <- knn_tune_wf %>%
+  finalize_workflow(knn_tune_best)
+
+final_knn_fit <- final_knn_wf %>%
+  last_fit(split)
+
+final_knn_fit %>%
+  collect_metrics()
+
+final_knn_fit %>%
+  collect_predictions() %>%
+  ggplot(aes(x = Sale_Price, y = .pred)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = 'red')
+
+final_tree <- extract_workflow(final_knn_fit)
+
+```
+
+And again this pre-processed version scores worse on RMSE ($37.7k vs. $34.3k) and R-squared (.786 vs .830) than the non-pre-processed model from chapter 2.
+
+

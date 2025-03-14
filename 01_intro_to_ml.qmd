@@ -1,6 +1,8 @@
 ---
-title: "01_intro_to_ml"
-format: html
+title: "Introduction to Machine Learning"
+format: 
+  html:
+    embed-resources: true
 ---
 
 ## Intro to the datasets
